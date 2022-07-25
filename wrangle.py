@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import numpy as np
 
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
@@ -88,9 +89,8 @@ def get_data():
         # Return the dataframe to the calling code
         return df  
 
-def get_data_dropna():
+def dropna_df(df):
     """Returns a dataframe free of null values where the columns have the proper dtypes"""
-    df = get_data()
     df = df.dropna()
     df = df.convert_dtypes()
     # convert_dtypes() chooses some slightly wonky data types that cause problems later.
@@ -99,7 +99,7 @@ def get_data_dropna():
     return fix
 
 ## Generic split data function
-def train_validate_test_split(df, seed=SEED, stratify=None):
+def train_test_validate_split(df, seed=SEED, stratify=None):
     """Splits data 60%/20%/20%"""
     # First split off our testing data.
     train, test_validate = train_test_split(
@@ -117,20 +117,104 @@ def train_validate_test_split(df, seed=SEED, stratify=None):
     )
     return train, test, validate
 
+def clean_zillow(df):
+    # By assuming that null values are the equivelant to false, we can save the column taxdelinquencyflag
+    df.taxdelinquencyflag = df.taxdelinquencyflag == 'Y'
+    # By converting taxdelinquencyyear to instead be a measure of how long the property has been tax deliquent we can save ourselves from dropping the null values.
+    df['years_tax_delinquent'] = (2017 - (df.taxdelinquencyyear +2000).replace(2099, 1999)).fillna(0)
+    # Because the overwhelming majority of these is values is 1, we are probably safe imputing the 1 in the missing values.
+    df.unitcnt = df.unitcnt.fillna(1.0)
+    # Fill heating type with Central because it is the most common heating type
+    df.heatingorsystemdesc = df.heatingorsystemdesc.fillna('Central')
+    # Create a new bathroom count by including three-quarter bathrooms
+    df['bathroom_sum'] = (df.fullbathcnt + (df.threequarterbathnbr.fillna(0) *.75))
 
+    # Drop the rest of the columns that have a large null percentage
+    nullPercent = df.isna().mean().sort_values()
+    dropcols = nullPercent[nullPercent > .34].index.tolist()
+    df = df.drop(columns=dropcols)
+    
+    # Drop columns that duplicate data or leak predicitons from previous model
+    df = df.drop(columns=[  'id',
+                            'id.1',
+                            'assessmentyear',
+                            'bathroomcnt',
+                            'finishedsquarefeet12',
+                            'logerror',
+                            'propertycountylandusecode',
+                            'propertylandusedesc',
+                            'propertylandusetypeid',
+                            'rawcensustractandblock',
+                            'censustractandblock',
+                            'regionidcounty',
+                            'transactiondate',
+                            'taxamount'])
+
+    # Drop the rows that have a null value.
+    df = dropna_df(df)
+
+    # Convert some columns into more useful information
+    df['age'] = 2017 - df.yearbuilt
+    df.regionidzip = df.regionidzip.replace(399675, 99675)
+    df.latitude = df.latitude / 1_000_000
+    df.longitude = df.longitude / 1_000_000
+
+    # Change the dtypes of some columns
+    cat_cols = ['parcelid',
+                'fips',
+                'regionidcity',
+                'regionidzip',
+                'yearbuilt',
+                'heatingorsystemdesc']
+    for col in cat_cols:
+        df[col] = df[col].astype('category')
+
+    # Drop duplicate parcels
+    df = df.drop_duplicates(subset='parcelid')
+
+    return df
+
+
+
+def trim_zillow(df):
+    # Trim the tax value outliers
+    uplim = np.percentile(df.taxvaluedollarcnt, 99)
+    uplim_mask = df.taxvaluedollarcnt > uplim
+    df = df[~uplim_mask]
+    # Trim the lot squarefoot outliers
+    uplim = np.percentile(df.lotsizesquarefeet, 99.5)
+    uplim_mask = df.lotsizesquarefeet > uplim
+    df = df[~uplim_mask]
+    # Trim some *probably* bad data
+    df = df[~df.lotsizesquarefeet < df.calculatedfinishedsquarefeet ]
+    df = df[df.bedroomcnt > 0]
+
+    return df
+
+def rename_zillow(df):
+    df = df.rename(columns={
+        'calculatedfinishedsquarefeet' : 'structure_sqft',
+        'calculatedbathnbr' : 'calc_bath',
+        'lotsizesquarefeet' : 'lot_sqft',
+        'structuretaxvaluedollarcnt': 'tax_structure',
+        'taxvaluedollarcnt': 'tax',
+        'landtaxvaluedollarcnt': 'tax_land'
+        })
+    return df
 
 def wrangle_zillow():
     """Living function that will change to always include the latest steps"""
-    df = get_data_dropna()
-    df['fips'] = df['fips'].astype('object')
-    df = df.drop(columns=['id','taxamount'])
-    df['age'] = 2022 - df.yearbuilt
-    # df = df.fillna(0)
-    train, validate, test = train_validate_test_split(df)
-    return train, validate, test
+    df = get_data()
+    df = clean_zillow(df)
+    train, test, validate = train_test_validate_split(df)
+    train = trim_zillow(train)
+    train = rename_zillow(train)
+    test = rename_zillow(test)
+    validate = rename_zillow(validate)
+    return train, test, validate
 
 
-def scale_zillow(train, validate, test):
+def scale_zillow(train, test, validate):
     """Takes 3 (zillow) dataframes, trains a quantile scaler on the first, then transforms them all to fit a normal distribution."""
     # Define the columns to be scaled
     scalecols = [   'bedroomcnt',
@@ -148,13 +232,8 @@ def scale_zillow(train, validate, test):
     test[scalecols] = scaler.transform(test[scalecols])
     validate[scalecols] = scaler.transform(validate[scalecols])
     # Return
-    return train, validate, test
+    return train, test, validate
 
-def wrangle_scale_zillow():
-    """Fun"""
-    train, validate, test = wrangle_zillow()
-    train, validate, test = scale_zillow(train, validate, test)
-    return train, validate, test
 
 from sklearn.preprocessing import MinMaxScaler
 def min_max_scale_df(df, cols=None):
