@@ -214,27 +214,6 @@ def wrangle_zillow():
     return train, test, validate
 
 
-def scale_zillow(train, test, validate):
-    """Takes 3 (zillow) dataframes, trains a quantile scaler on the first, then transforms them all to fit a normal distribution."""
-    # Define the columns to be scaled
-    scalecols = [   'bedroomcnt',
-                    'bathroomcnt',
-                    'calculatedfinishedsquarefeet',
-                    'taxvaluedollarcnt',
-                    'age'
-                ]
-    # Create and fit the model to the train sample set
-    
-    scaler = QuantileTransformer(output_distribution='normal')
-    scaler.fit(train[scalecols])
-    # Transform each sample set
-    train[scalecols] = scaler.transform(train[scalecols])
-    test[scalecols] = scaler.transform(test[scalecols])
-    validate[scalecols] = scaler.transform(validate[scalecols])
-    # Return
-    return train, test, validate
-
-
 from sklearn.preprocessing import MinMaxScaler
 def min_max_scale_df(df, cols=None):
     """General use function to scale a dataframe and keep it in dataframe format."""
