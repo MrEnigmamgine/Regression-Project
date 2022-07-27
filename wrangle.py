@@ -104,14 +104,14 @@ def train_test_validate_split(df, seed=SEED, stratify=None):
     # First split off our testing data.
     train, test_validate = train_test_split(
         df, 
-        test_size=3/5, 
+        train_size=3/5, 
         random_state=seed, 
         stratify=( df[stratify] if stratify else None)
     )
     # Then split the remaining into train/validate data.
     test, validate = train_test_split(
         test_validate,
-        test_size=1/2,
+        train_size=1/2,
         random_state=seed,
         stratify= (test_validate[stratify] if stratify else None)
     )
@@ -182,8 +182,12 @@ def trim_zillow(df):
     uplim_mask = df.taxvaluedollarcnt > uplim
     df = df[~uplim_mask]
     # Trim the lot squarefoot outliers
-    uplim = np.percentile(df.lotsizesquarefeet, 99.5)
+    uplim = np.percentile(df.lotsizesquarefeet, 99)
     uplim_mask = df.lotsizesquarefeet > uplim
+    df = df[~uplim_mask]
+    # Trim the structure squarefoot outliers
+    uplim = np.percentile(df.calculatedfinishedsquarefeet, 99)
+    uplim_mask = df.calculatedfinishedsquarefeet > uplim
     df = df[~uplim_mask]
     # Trim some *probably* bad data
     df = df[~df.lotsizesquarefeet < df.calculatedfinishedsquarefeet ]
